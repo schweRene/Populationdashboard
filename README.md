@@ -18,14 +18,14 @@ Ein interaktives Dashboar zur Visualisierung der weltweiten Bevölkerungsentwick
    `.venv\Scripts\activate` (Windows)
 
 3. **Abhängigkeiten installieren**:
-   `pip install pandas dash plotly`
+   `pip install pandas streamlit plotly`
 
 4. **App starten**:
    `python app.py`
 
 ## Verwendete Technologien
 * Python
-* Plotly Dash
+* Streamlit
 * Pandas (Datenverarbeitung)
 
 ## Screenshots
