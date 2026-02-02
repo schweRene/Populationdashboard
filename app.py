@@ -1,262 +1,134 @@
 import pandas as pd
-from dash import Dash, html, dcc, Input, Output
-import os
+import streamlit as st
 import plotly.express as px
+import os
 
+# ===================== CONFIG =====================
+st.set_page_config(page_title="Population Dashboard", layout="wide")
+
+@st.cache_data
 def load_data(file_path):
-    if not os.path.exists(file_path):
-        return pd.DataFrame() 
+    if not os.path.exists(file_path): return pd.DataFrame()
     df = pd.read_csv(file_path)
-    df['year'] = df['year'].astype(int)
-    df['population'] = pd.to_numeric(df['population'], errors='coerce')
+    df["year"] = pd.to_numeric(df["year"], errors='coerce').fillna(0).astype(int)
+    df["population"] = pd.to_numeric(df["population"], errors="coerce").fillna(0)
     return df
 
-def get_country_options(df):
-    unique_countries = sorted(df['country'].unique())
-    return [{'label': c, 'value': c} for c in unique_countries]
+def format_pop(val):
+    if val <= 0: return "0"
+    if val >= 1_000_000_000: return f"{val/1_000_000_000:.2f} Mrd."
+    if val >= 1_000_000: return f"{val/1_000_000:.1f} Mio."
+    return f"{val:,.0f}".replace(",", ".")
 
-def get_latest_population(df, selected_country):
-    country_df = df[df['country'] == selected_country]
-    if country_df.empty:
-        return "Keine Daten"
-    latest_row = country_df.loc[country_df['year'].idxmax()]
-    population_value = latest_row['population']
-    formatted_value = f"{population_value:,.0f}".replace(",", ".")
-    return f"{formatted_value} Einwohner ({int(latest_row['year'])})"
+data = load_data("population_continent.csv")
 
-def create_population_chart(df, selected_country):
-    filtered_df = df[df['country'] == selected_country].sort_values(by='year')
-    fig = px.line(
-        filtered_df, x='year', y='population',
-        title=f'Bevölkerungsentwicklung: {selected_country}',
-        template='plotly_white'
-    )
-    fig.update_traces(line_color='#007BFF', line_width=3)
-    return fig
+st.markdown("<h1 style='text-align:center;'>🌍 Global Population Dashboard</h1>", unsafe_allow_html=True)
 
-def create_comparison_chart(df, selected_year):
-    """
-    Top 10 mit korrekter Mrd./Mio. Schreibweise ohne hängendes Komma.
-    """
-    year_df = df[df['year'] == selected_year]
-    top_10 = year_df.nlargest(10, 'population').copy()
-    
-    def format_german_units(pop):
-        if pop >= 1_000_000_000:
-            # Erst runden und Komma setzen, dann Mrd. anhängen
-            val = f"{pop / 1_000_000_000:.2f}".replace('.', ',')
-            return f"{val} Mrd."
-        else:
-            val = f"{pop / 1_000_000:.1f}".replace('.', ',')
-            return f"{val} Mio."
+# ===================== FILTER =====================
+c1, c2, c3 = st.columns(3)
+with c1:
+    region_options = ["World"] + sorted(data["continent"].unique().tolist())
+    sel_reg = st.selectbox("🌍 Gebiet auswählen", region_options, index=0)
 
-    top_10['display_text'] = top_10['population'].apply(format_german_units)
-    
-    fig = px.bar(
-        top_10, x='population', y='country', orientation='h',
-        title=f'Top 10 bevölkerungsreichste Länder ({selected_year})',
-        text='display_text',
-        template='plotly_white'
-    )
-    
-    fig.update_traces(
-        textposition='auto', 
-        textfont_size=14,
-        marker_color='#2c3e50',
-        cliponaxis=False
-    )
-    
-    fig.update_layout(
-        yaxis={'categoryorder': 'total ascending'},
-        xaxis={'showticklabels': False, 'title': ''},
-        margin=dict(l=150, r=120), # Genug Platz für die Texte
-        separators=',.' 
-    )
-    return fig
+filtered_data = data.copy() if sel_reg == "World" else data[data["continent"] == sel_reg]
 
-def create_lowest_population_chart(df, selected_year):
-    """
-    Erstellt ein Donut-Chart der 10 bevölkerungsärmsten Länder.
-    Jetzt mit korrekten Tausenderpunkten (Deutsch).
-    """
-    year_df = df[df['year'] == selected_year]
-    bottom_10 = year_df.nsmallest(10, 'population')
-    
-    fig = px.pie(
-        bottom_10, 
-        values='population', 
-        names='country', 
-        title=f'10 bevölkerungsärmste Länder ({selected_year})',
-        hole=0.4,
-        template='plotly_white'
-    )
-    
-    # separators=',.' -> Erstes Zeichen ist Tausender-Trenner, zweites Dezimal-Trenner
-    # Hier erzwingen wir die deutsche Darstellung: Punkt für Tausender.
-    fig.update_traces(
-        textinfo='value+label', 
-        texttemplate='%{label}<br>%{value:,.0f}',
-        textfont_size=13,
-        hovertemplate='%{label}: %{value:,.0f} Einwohner'
-    )
-    
-    # Layout-Anpassung für die deutschen Trennzeichen
-    fig.update_layout(
-        showlegend=False, 
-        margin=dict(t=50, b=10, l=10, r=10),
-        separators=',.' # WICHTIG: Ersetzt englisches Komma durch deutschen Punkt in der Anzeige
-    )
-    return fig
+with c2:
+    countries = ["Keine Auswahl"] + sorted(filtered_data["country"].unique())
+    # Geändert von multiselect zu selectbox für automatisches Zuklappen
+    sel_country = st.selectbox("Land auswählen", countries, index=0)
 
-def get_growth_rate(df, selected_country):
-    country_df = df[df['country'] == selected_country].sort_values('year')
-    if len(country_df) < 2:
-        return html.Span("Keine Vergleichsdaten", style={'color': 'gray'})
-    latest_row = country_df.iloc[-1]
-    previous_row = country_df.iloc[-2]
-    if latest_row['year'] != previous_row['year'] + 1:
-        return html.Span(f"Datenlücke", style={'color': 'gray'})
-    rate = ((latest_row['population'] - previous_row['population']) / previous_row['population']) * 100
-    if rate > 0.001:
-        color, symbol = "#27ae60", "▲"
-    elif rate < -0.001:
-        color, symbol = "#e74c3c", "▼"
+with c3:
+    sel_year = st.slider("Jahr", int(data.year.min()), int(data.year.max()), int(data.year.max()))
+
+# ===================== KPI SEKTION =====================
+kpi_l, kpi_r = st.columns(2)
+
+def get_stats(df_scope, year):
+    curr = df_scope[df_scope["year"] == year]["population"].sum()
+    prev = df_scope[df_scope["year"] == year - 1]["population"].sum()
+    delta = ((curr - prev) / prev * 100) if prev > 0 else 0
+    return curr, delta
+
+with kpi_l:
+    pop_reg, growth_reg = get_stats(filtered_data, sel_year)
+    label_reg = "Welt" if sel_reg == "World" else sel_reg
+    st.metric(label=f"Bevölkerung {label_reg}", value=format_pop(pop_reg), delta=f"{growth_reg:+.2f}% Wachstumsrate")
+
+with kpi_r:
+    if sel_country != "Keine Auswahl":
+        c_data = data[data["country"] == sel_country]
+        pop_c, growth_c = get_stats(c_data, sel_year)
+        st.metric(label=f"{sel_country}", value=format_pop(pop_c), delta=f"{growth_c:+.2f}% Wachstumsrate")
     else:
-        color, symbol = "#7f8c8d", "●"
-    return html.Span([
-        f"{symbol} {rate:+.2f}% ",
-        html.Span("vs. Vorjahr", style={'fontSize': '12px', 'color': '#7f8c8d'})
-    ], style={'color': color, 'fontWeight': 'bold'})
+        st.metric(label="Ausgewähltes Land", value="Keine Auswahl")
 
-def create_world_map(df, selected_year):
-    """
-    Docstring for create_world_map
-    
-    :param df: Description
-    :param selected_year: Description
-    #DataFrame auf das aktuelle Jahr filtern
-    """
-    fig = px.choropleth(
-        df[df['year'] == selected_year],
-        locations="country",           #Spalte mit den Ländernamen
-        locationmode="country names",    #Plotly erkennt die Namen automatisch
-        color="population",         #Wonach soll gefärbt werden
-        hover_name="country",       #Was steht im Tooltip
-        title=f"Globale Bevölkerungsverteilung {selected_year}",
-        color_continuous_scale=px.colors.sequential.Plasma,         #Farbskala
-        template='plotly_white',
-        labels={'population': 'Einwohner'}
-    )
+st.markdown("---")
 
-    # Karte verbessern
-    fig.update_layout(
-        margin=dict(l=0, r=0, t=50, b=0),
-        coloraxis_showscale=True        #Zeigt die Farbskala an
-    )
+# ===================== WELTKARTE =====================
+st.subheader(f"{sel_reg}")
+map_data = filtered_data[filtered_data["year"] == sel_year].copy()
 
-    return fig
+# Filter auf Land, falls eines gewählt wurde
+if sel_country != "Keine Auswahl":
+    map_data = map_data[map_data["country"] == sel_country]
 
-def create_layout(df):
-    return html.Div([
-        # 1. DER HEADER (Ganz oben)
-        html.Div([
-            html.H1("Population-Dashboard", style={'margin': '0', 'color': 'white'}),
-        ], style={'backgroundColor': '#2c3e50', 'padding': '20px', 'textAlign': 'center'}),
+map_data["Zahl"] = map_data["population"].apply(format_pop)
 
-        # 2. ZEILE 1: Filter (links) & Weltkarte (rechts)
-        html.Div([
-            # Linke Spalte (30% Breite)
-            html.Div([
-                html.Div([
-                    html.Label("Land auswählen:", style={'fontWeight': 'bold'}),
-                    dcc.Dropdown(
-                        id='country-dropdown', 
-                        options=get_country_options(df), 
-                        value='Germany', 
-                        clearable=False
-                    )
-                ], style={'marginBottom': '20px'}),
-                
-                # Hier landet die Statistik (Einwohnerzahl + Wachstum)
-                html.Div(id='latest-population-info') 
-            ], style={'width': '30%'}),
+scope_map = {"Africa": "africa", "Asia": "asia", "Europe": "europe"}
+current_scope = scope_map.get(sel_reg, "world")
+current_proj = "natural earth" if sel_reg == "World" else "mercator"
 
-            # Rechte Spalte (68% Breite) für die Weltkarte
-            html.Div([
-                dcc.Graph(id='world-map')
-            ], style={'width': '68%'})
-        ], style={
-            'display': 'flex', 
-            'justifyContent': 'space-between', 
-            'width': '98%', 
-            'margin': '20px auto'
-        }),
-
-        # 3. ZEILE 2: Das Liniendiagramm (Volle Breite unter der Karte)
-        html.Div([
-            dcc.Graph(id='population-graph')
-        ], style={'width': '98%', 'margin': '0 auto 20px auto'}),
-
-        # 4. ZEILE 3: Die zwei Vergleiche (Top 10 & Bottom 10)
-        html.Div([
-            html.Div([
-                dcc.Graph(id='comparison-graph')
-            ], style={'width': '49%'}),
-            
-            html.Div([
-                dcc.Graph(id='lowest-population-graph')
-            ], style={'width': '49%'})
-        ], style={
-            'display': 'flex', 
-            'justifyContent': 'space-between', 
-            'width': '98%', 
-            'margin': 'auto'
-        })
-
-    ], style={
-        'backgroundColor': '#f8f9fa', 
-        'minHeight': '100vh', 
-        'fontFamily': 'Arial'
-    })
-
-# --------- Initialisierung & Callback ------
-data = load_data('population_clean.csv')
-app = Dash(__name__)
-
-server = app.server
-
-app.layout = create_layout(data)
-
-@app.callback(
-    [Output('world-map', 'figure'),           # 1. Karte
-     Output('population-graph', 'figure'),    # 2. Liniendiagramm
-     Output('latest-population-info', 'children'), # 3. Text
-     Output('comparison-graph', 'figure'),    # 4. Balkendiagramm
-     Output('lowest-population-graph', 'figure')], # 5. Donut-Diagramm
-    Input('country-dropdown', 'value')
+fig_map = px.choropleth(
+    map_data, locations="iso3", color="population", hover_name="country",
+    custom_data=["Zahl"], color_continuous_scale="Viridis", 
+    scope=current_scope,
+    projection=current_proj
 )
 
-def update_graph(selected_country):
-    latest_year = data['year'].max()
-    
-    # 1. Funktionen aufrufen
-    fig_map = create_world_map(data, latest_year)
-    fig_line = create_population_chart(data, selected_country)
-    fig_bar = create_comparison_chart(data, latest_year)
-    fig_pie = create_lowest_population_chart(data, latest_year)
-    
-    # 3. Statistiken holen
-    pop_text = get_latest_population(data, selected_country)
-    growth_info = get_growth_rate(data, selected_country)
+# --- SKALA ---
+max_val = map_data["population"].max() if not map_data.empty else 0
+if max_val >= 1_000_000_000:
+    tick_vals = [i * 200_000_000 for i in range(int(max_val/200_000_000) + 2)]
+    tick_text = [f"{v/1_000_000_000:.1f} Mrd." for v in tick_vals]
+elif max_val >= 1_000_000:
+    tick_vals = [i * 50_000_000 for i in range(int(max_val/50_000_000) + 2)]
+    tick_text = [f"{v/1_000_000:.0f} Mio." for v in tick_vals]
+else:
+    tick_vals, tick_text = None, None
 
+fig_map.update_layout(coloraxis_colorbar=dict(
+    title="Bevölkerung", tickvals=tick_vals, ticktext=tick_text
+))
 
-    info_display = html.Div([
-        html.Div(pop_text, style={'fontSize': '20px', 'fontWeight': 'bold'}), 
-        html.Div(growth_info)
-    ])
-    
-    # WICHTIG: Die Reihenfolge im Return muss EXAKT wie oben bei den Outputs sein!
-    return fig_map, fig_line, info_display, fig_bar, fig_pie
+# --- ZOOMS ---
+if sel_reg == "Amerika":
+    fig_map.update_geos(lataxis_range=[-56, 75], lonaxis_range=[-175, -30])
+elif sel_reg == "Asia":
+    fig_map.update_geos(lataxis_range=[-15, 65], lonaxis_range=[25, 160])
+elif sel_reg == "Oceania":
+    fig_map.update_geos(lataxis_range=[-55, 10], lonaxis_range=[100, 185])
 
-if __name__ == '__main__':
-    app.run(debug=True)
+fig_map.update_traces(hovertemplate="<b>%{hovertext}</b><br>Bevölkerung<br>%{customdata[0]}<extra></extra>")
+fig_map.update_layout(
+    margin={"r":0,"t":0,"l":0,"b":0}, height=650,
+    geo=dict(showcountries=True, countrycolor="DarkGrey", showocean=True, oceancolor="AliceBlue")
+)
+st.plotly_chart(fig_map, use_container_width=True)
+
+# ===================== DIAGRAMME =====================
+u1, u2 = st.columns(2)
+chart_year_data = filtered_data[(filtered_data["year"] == sel_year) & (filtered_data["population"] > 0)]
+
+with u1:
+    top10 = chart_year_data.nlargest(10, "population").sort_values("population", ascending=True)
+    top10["pop_text"] = top10["population"].apply(format_pop)
+    st.plotly_chart(px.bar(top10, x="population", y="country", orientation="h", 
+                           title=f"Größte Population ({sel_reg})", text="pop_text", 
+                           color="population", color_continuous_scale="Reds"), use_container_width=True)
+
+with u2:
+    bottom10 = chart_year_data.nsmallest(10, "population").sort_values("population", ascending=True)
+    bottom10["pop_text"] = bottom10["population"].apply(format_pop)
+    st.plotly_chart(px.bar(bottom10, x="population", y="country", orientation="h", 
+                           title=f"Kleinste Population ({sel_reg})", text="pop_text", 
+                           color="population", color_continuous_scale="Blues_r"), use_container_width=True)
