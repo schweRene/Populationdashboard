@@ -222,6 +222,9 @@ def create_layout(df):
 # --------- Initialisierung & Callback ------
 data = load_data('population_clean.csv')
 app = Dash(__name__)
+
+server = app.server
+
 app.layout = create_layout(data)
 
 @app.callback(
